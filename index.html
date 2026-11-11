@@ -1,0 +1,777 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="description" content="Voice-controlled mini ERP: open modules, fill forms, search and raise tickets by speaking.">
+<title>VoiceDesk ERP</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap">
+<style>
+/* Layout: sticky bar with the mic; below it a workspace (home tiles or one open module) beside an assistant rail that shows what was heard and what was done. */
+:root{
+  --bg:#EEF1F6; --surface:#FFFFFF; --surface-2:#F5F7FB; --ink:#142033; --muted:#566377; --line:#D9E0EA;
+  --accent:#1B5BD8; --accent-ink:#FFFFFF; --accent-soft:#E3ECFD;
+  --live:#D6371F; --on-live:#FFFFFF; --live-ring:rgba(214,55,31,.45);
+  --ok:#17794A; --ok-soft:#DDF3E6; --warn:#8A5707; --warn-soft:#FBEBCB; --crit:#B42318; --crit-soft:#FBE3E0;
+  --font-body:'IBM Plex Sans',system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;
+  --font-mono:'IBM Plex Mono',ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#0E1522; --surface:#151F30; --surface-2:#1A2539; --ink:#E6ECF5; --muted:#9AA8BD; --line:#27344A;
+    --accent:#6B9BFF; --accent-ink:#0B1220; --accent-soft:#1D2D4D;
+    --live:#FF7A63; --on-live:#1A0B08; --live-ring:rgba(255,122,99,.45);
+    --ok:#5CD28F; --ok-soft:#14301F; --warn:#F2B84B; --warn-soft:#3A2D0F; --crit:#FF8D80; --crit-soft:#3B1B18;
+    color-scheme:dark;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#0E1522; --surface:#151F30; --surface-2:#1A2539; --ink:#E6ECF5; --muted:#9AA8BD; --line:#27344A;
+  --accent:#6B9BFF; --accent-ink:#0B1220; --accent-soft:#1D2D4D;
+  --live:#FF7A63; --on-live:#1A0B08; --live-ring:rgba(255,122,99,.45);
+  --ok:#5CD28F; --ok-soft:#14301F; --warn:#F2B84B; --warn-soft:#3A2D0F; --crit:#FF8D80; --crit-soft:#3B1B18;
+  color-scheme:dark;
+}
+*{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%}
+body{margin:0}
+img{max-width:100%}
+[hidden]{display:none!important}
+body{background:var(--bg);color:var(--ink);font-family:var(--font-body);font-size:14px;line-height:1.5}
+body::before{content:"";position:fixed;inset:0 0 auto;height:env(safe-area-inset-top,0px);z-index:10;background:var(--surface)}
+h1,h2,p{margin:0}
+h1{font-size:22px;line-height:1.25;font-weight:600;text-wrap:balance}
+h2{font-size:14px;font-weight:600}
+button,input,select{font:inherit;color:inherit}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+
+.top{position:sticky;top:env(safe-area-inset-top,0px);z-index:20;background:var(--surface);border-bottom:1px solid var(--line)}
+.top-in{max-width:1180px;margin:0 auto;display:flex;align-items:center;gap:12px;padding-block:10px;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px))}
+.brand{display:flex;align-items:center;gap:8px;font-weight:700;font-size:16px;letter-spacing:-.01em}
+.brand svg{width:22px;height:22px;color:var(--accent)}
+.brand small{font:500 11px var(--font-mono);color:var(--muted);border:1px solid var(--line);padding:1px 6px;border-radius:4px}
+.spacer{flex:1}
+.status{font-size:12px;color:var(--muted);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.mic{display:inline-flex;align-items:center;gap:8px;min-height:44px;padding:0 18px 0 14px;border:1px solid var(--accent);background:var(--accent);color:var(--accent-ink);border-radius:999px;font-weight:600;cursor:pointer;white-space:nowrap}
+.mic svg{width:18px;height:18px}
+.mic:disabled{opacity:.5;cursor:not-allowed}
+.mic[data-state="listening"]{background:var(--live);border-color:var(--live);color:var(--on-live);animation:pulse 1.6s ease-out infinite}
+@keyframes pulse{0%{box-shadow:0 0 0 0 var(--live-ring)}100%{box-shadow:0 0 0 14px transparent}}
+
+.shell{max-width:1180px;margin:0 auto;display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:20px;align-items:start;padding-block:20px 32px;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px))}
+.work{min-width:0;display:flex;flex-direction:column;gap:16px}
+.rail{min-width:0;display:flex;flex-direction:column;gap:14px}
+@media (max-width:900px){.shell{grid-template-columns:minmax(0,1fr)}}
+@media (max-width:520px){.status{display:none}.brand small{display:none}}
+
+.crumbs{font:500 12px var(--font-mono);color:var(--muted);display:flex;gap:6px;flex-wrap:wrap}
+.crumbs b{color:var(--ink);font-weight:500}
+.lede{color:var(--muted);max-width:60ch}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:16px;min-width:0}
+.card > h2{margin-bottom:12px;display:flex;align-items:baseline;gap:8px}
+.card > h2 span{font:500 12px var(--font-mono);color:var(--muted)}
+.tablecard{padding:0;overflow:hidden}
+.tablecard > h2{padding:14px 16px 0;margin-bottom:8px}
+.scroll{overflow-x:auto}
+
+.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:14px}
+.tile{text-align:left;background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:18px;display:flex;flex-direction:column;gap:6px;cursor:pointer;min-width:0}
+.tile:hover{border-color:var(--accent)}
+.tile .ico{width:34px;height:34px;color:var(--accent);margin-bottom:6px}
+.tile h2{font-size:17px}
+.tile p{color:var(--muted)}
+.tile .count{font:500 12px var(--font-mono);color:var(--ink);margin-top:6px}
+.tile .say{font:400 12px var(--font-mono);color:var(--muted)}
+
+.modhead{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.eyebrow{font:500 11px var(--font-mono);letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin-bottom:2px}
+.split{display:grid;grid-template-columns:minmax(0,340px) minmax(0,1fr);gap:16px;align-items:start}
+@media (max-width:720px){.split{grid-template-columns:minmax(0,1fr)}}
+.fields{display:flex;flex-direction:column;gap:12px}
+.field{display:flex;flex-direction:column;gap:4px;min-width:0}
+.field label{font-size:12px;font-weight:600;color:var(--muted)}
+.field input,.field select,.searchbar input,.cmd input{width:100%;min-height:38px;padding:6px 10px;border:1px solid var(--line);border-radius:6px;background:var(--surface);color:var(--ink)}
+.flash{animation:flash 1.3s ease-out}
+@keyframes flash{0%{background:var(--accent-soft);box-shadow:0 0 0 3px var(--accent-soft)}100%{background:var(--surface);box-shadow:0 0 0 0 transparent}}
+.actions{display:flex;gap:8px;margin-top:14px;flex-wrap:wrap}
+.btn{min-height:38px;padding:0 14px;border:1px solid var(--line);background:var(--surface);border-radius:6px;font-weight:600;cursor:pointer}
+.btn:hover{border-color:var(--accent)}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
+.hint{margin-top:12px;font-size:12px;color:var(--muted)}
+
+table{width:100%;border-collapse:collapse;font-size:13px}
+th{font:600 11px var(--font-body);letter-spacing:.06em;text-transform:uppercase;color:var(--muted);text-align:left;padding:10px 12px;border-bottom:1px solid var(--line);white-space:nowrap}
+td{padding:10px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+tbody tr:last-child td{border-bottom:0}
+.mono{font:400 12px var(--font-mono);white-space:nowrap}
+.num{font-variant-numeric:tabular-nums}
+tr.new td{animation:rowflash 2.4s ease-out}
+@keyframes rowflash{0%,60%{background:var(--accent-soft)}100%{background:transparent}}
+tr.pick{cursor:pointer}
+tr.pick:hover td{background:var(--surface-2)}
+tr.sel td{background:var(--accent-soft)}
+.empty td{color:var(--muted);padding:22px 12px}
+.pill{display:inline-flex;align-items:center;gap:6px;padding:1px 8px;border-radius:999px;font-size:12px;font-weight:600;white-space:nowrap;background:var(--surface-2);color:var(--muted)}
+.pill::before{content:"";width:6px;height:6px;border-radius:50%;background:currentColor}
+.s-open{background:var(--accent-soft);color:var(--accent)}
+.s-prog{background:var(--warn-soft);color:var(--warn)}
+.s-done{background:var(--ok-soft);color:var(--ok)}
+.p-high,.p-urgent{background:var(--crit-soft);color:var(--crit)}
+
+.searchbar{display:flex;gap:8px;flex-wrap:wrap}
+.searchbar input{flex:1 1 220px}
+.meta{font-size:12px;color:var(--muted)}
+.result{border:1px solid var(--ok);background:var(--ok-soft);color:var(--ink);border-radius:10px;padding:12px 16px}
+.result b{font-family:var(--font-mono);font-weight:500}
+.foot{font-size:12px;color:var(--muted)}
+
+.heard .live{min-height:44px;font:400 14px var(--font-mono);color:var(--ink);word-break:break-word}
+.heard .live.idle{color:var(--muted)}
+.heard .note{margin-top:8px;font-size:12px;color:var(--muted)}
+#log{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:8px;max-height:300px;overflow-y:auto}
+#log li{padding:8px 10px;border-radius:8px;font-size:13px;min-width:0;overflow-wrap:anywhere}
+#log li.you{background:var(--surface-2);font-family:var(--font-mono);font-size:12px}
+#log li.you::before{content:"You  ";color:var(--muted)}
+#log li.bot{background:var(--accent-soft)}
+#log li.warn{background:var(--warn-soft)}
+.cmd label{display:block;font-size:12px;font-weight:600;color:var(--muted);margin-bottom:4px}
+.cmd div{display:flex;gap:8px}
+.seq{margin:0;padding:0;list-style:none;display:flex;flex-direction:column;gap:6px;counter-reset:s}
+.seq li{counter-increment:s;display:flex;gap:8px;align-items:flex-start}
+.seq li::before{content:counter(s);font:500 11px var(--font-mono);color:var(--muted);width:16px;padding-top:6px;text-align:right;flex:none}
+.seq button{flex:1;min-width:0;text-align:left;background:var(--surface-2);border:1px solid var(--line);border-radius:6px;padding:5px 10px;cursor:pointer;font-size:12.5px}
+.seq button:hover{border-color:var(--accent)}
+.linkbtn{background:none;border:0;padding:0;color:var(--muted);text-decoration:underline;cursor:pointer;font-size:12px}
+@media (prefers-reduced-motion:reduce){.flash,tr.new td,.mic[data-state="listening"]{animation:none}}
+</style>
+</head>
+<body>
+<header class="top">
+  <div class="top-in">
+    <div class="brand">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12h2M7 8v8M11 5v14M15 8v8M19 11v2M22 12h-1"/></svg>
+      VoiceDesk <small>ERP</small>
+    </div>
+    <span class="spacer"></span>
+    <span class="status" id="status">Checking voice support…</span>
+    <button class="mic" id="mic" type="button" aria-pressed="false" disabled data-state="idle">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>
+      <span id="micLabel">Checking voice…</span>
+    </button>
+  </div>
+</header>
+
+<main class="shell">
+  <section class="work">
+    <nav class="crumbs" id="crumbs" aria-label="Location"></nav>
+
+    <!-- HOME -->
+    <div id="view-home" style="display:flex;flex-direction:column;gap:16px">
+      <div>
+        <h1>What do you want to open?</h1>
+        <p class="lede">Say “open HR”, “go to ticketing” or “customer module”. Clicking a module works too.</p>
+      </div>
+      <div class="tiles">
+        <button class="tile" type="button" data-open="hr">
+          <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="9" cy="8" r="3.2"/><path d="M3 20c0-3.3 2.7-6 6-6s6 2.7 6 6"/><circle cx="17.5" cy="9" r="2.4"/><path d="M17 14.2c2.4.2 4 2 4 4.3"/></svg>
+          <h2>HR</h2><p>Employee records and onboarding.</p>
+          <span class="count" id="cHr"></span><span class="say">Say “open HR”</span>
+        </button>
+        <button class="tile" type="button" data-open="tickets">
+          <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 9a2 2 0 0 0 0 6v3h18v-3a2 2 0 0 1 0-6V6H3z"/><path d="M14 6v12" stroke-dasharray="2 3"/></svg>
+          <h2>Ticketing</h2><p>Search and review support tickets.</p>
+          <span class="count" id="cTk"></span><span class="say">Say “go to ticketing”</span>
+        </button>
+        <button class="tile" type="button" data-open="customers">
+          <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 21V5a1 1 0 0 1 1-1h8a1 1 0 0 1 1 1v16M14 10h5a1 1 0 0 1 1 1v10M2 21h20"/><path d="M8 8h2M8 12h2M8 16h2"/></svg>
+          <h2>Customers</h2><p>Accounts, and tickets raised on their behalf.</p>
+          <span class="count" id="cCu"></span><span class="say">Say “customer module”</span>
+        </button>
+      </div>
+    </div>
+
+    <!-- HR -->
+    <div id="view-hr" hidden style="display:flex;flex-direction:column;gap:16px">
+      <div class="modhead">
+        <div><p class="eyebrow">Module</p><h1>HR · Employees</h1></div>
+        <button class="btn" type="button" data-exit>Exit module</button>
+      </div>
+      <div class="split">
+        <form class="card" id="empForm" novalidate>
+          <h2>New employee</h2>
+          <div class="fields">
+            <div class="field"><label for="f-emp-name">Name</label><input id="f-emp-name" autocomplete="off"></div>
+            <div class="field"><label for="f-emp-age">Age</label><input id="f-emp-age" inputmode="numeric" maxlength="2" autocomplete="off"></div>
+            <div class="field"><label for="f-emp-dept">Department</label><input id="f-emp-dept" autocomplete="off"></div>
+            <div class="field"><label for="f-emp-role">Role</label><input id="f-emp-role" autocomplete="off"></div>
+          </div>
+          <div class="actions">
+            <button class="btn primary" type="submit">Save employee</button>
+            <button class="btn" type="button" id="empClear">Clear</button>
+          </div>
+          <p class="hint">Say “enter employee details, name … and age …”. Then “save”, or just “exit” and a complete form is saved for you.</p>
+        </form>
+        <div class="card tablecard">
+          <h2>Employees <span id="empCount"></span></h2>
+          <div class="scroll"><table>
+            <thead><tr><th>ID</th><th>Name</th><th>Age</th><th>Department</th><th>Role</th></tr></thead>
+            <tbody id="empBody"></tbody>
+          </table></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- TICKETING -->
+    <div id="view-tickets" hidden style="display:flex;flex-direction:column;gap:16px">
+      <div class="modhead">
+        <div><p class="eyebrow">Module</p><h1>Ticketing</h1></div>
+        <button class="btn" type="button" data-exit>Exit module</button>
+      </div>
+      <form class="searchbar" id="tkSearchForm" role="search">
+        <input id="tkSearch" type="search" placeholder="Search by customer, subject or ticket ID" aria-label="Search tickets" autocomplete="off">
+        <button class="btn" type="button" id="tkClear">Show all</button>
+      </form>
+      <p class="meta" id="tkMeta"></p>
+      <div class="card tablecard"><div class="scroll"><table>
+        <thead><tr><th>ID</th><th>Customer</th><th>Type</th><th>Subject</th><th>Priority</th><th>Status</th><th>Created</th></tr></thead>
+        <tbody id="tkBody"></tbody>
+      </table></div></div>
+    </div>
+
+    <!-- CUSTOMERS -->
+    <div id="view-customers" hidden style="display:flex;flex-direction:column;gap:16px">
+      <div class="modhead">
+        <div><p class="eyebrow">Module</p><h1>Customers</h1></div>
+        <button class="btn" type="button" data-exit>Exit module</button>
+      </div>
+      <div class="result" id="tkResult" hidden></div>
+      <div class="split">
+        <form class="card" id="tkForm" novalidate>
+          <h2>Create ticket on behalf of a customer</h2>
+          <div class="fields">
+            <div class="field"><label for="f-tk-customer">Customer</label><select id="f-tk-customer"></select></div>
+            <div class="field"><label for="f-tk-type">Type</label>
+              <select id="f-tk-type"><option>Support request</option><option>Incident</option><option>Service request</option><option>Change request</option></select></div>
+            <div class="field"><label for="f-tk-subject">Subject</label><input id="f-tk-subject" autocomplete="off"></div>
+            <div class="field"><label for="f-tk-priority">Priority</label>
+              <select id="f-tk-priority"><option>Low</option><option selected>Medium</option><option>High</option><option>Urgent</option></select></div>
+          </div>
+          <div class="actions">
+            <button class="btn primary" type="submit">Create ticket</button>
+            <button class="btn" type="button" id="tkFormClear">Clear</button>
+          </div>
+          <p class="hint">Say “create a ticket on behalf of …, support request for …”.</p>
+        </form>
+        <div class="card tablecard">
+          <h2>Customers <span id="cuCount"></span></h2>
+          <div class="scroll"><table>
+            <thead><tr><th>Name</th><th>Company</th><th>Open tickets</th></tr></thead>
+            <tbody id="cuBody"></tbody>
+          </table></div>
+        </div>
+      </div>
+    </div>
+
+    <p class="foot">Sample records for demonstration. Changes live in this page only and reset when you reload. <button class="linkbtn" type="button" id="reset">Reset sample data</button></p>
+  </section>
+
+  <aside class="rail" aria-label="Voice assistant">
+    <section class="card heard">
+      <h2>Heard</h2>
+      <p class="live idle" id="live" aria-live="polite">Nothing yet.</p>
+      <p class="note" id="voiceNote"></p>
+    </section>
+    <section class="card">
+      <h2>Assistant</h2>
+      <ol id="log" aria-live="polite"></ol>
+    </section>
+    <form class="cmd" id="cmdForm">
+      <label for="cmd">Type a command instead</label>
+      <div><input id="cmd" autocomplete="off" placeholder="open HR"><button class="btn primary" type="submit">Run</button></div>
+    </form>
+    <section class="card">
+      <h2>Try this sequence</h2>
+      <ol class="seq" id="seq">
+        <li><button type="button">Open HR module</button></li>
+        <li><button type="button">Enter employee details, name Uddgam and age 18</button></li>
+        <li><button type="button">Exit form</button></li>
+        <li><button type="button">Go to ticketing module</button></li>
+        <li><button type="button">Search for Uddgam Singh any ticket</button></li>
+        <li><button type="button">Exit</button></li>
+        <li><button type="button">Go to customer module</button></li>
+        <li><button type="button">Create a ticket on behalf of Uddgam, support request for VPN</button></li>
+        <li><button type="button">Exit</button></li>
+      </ol>
+      <p class="hint">Each line also works as one spoken sentence. Chain as many as you like.</p>
+    </section>
+  </aside>
+</main>
+
+<script>
+(function(){
+'use strict';
+
+// <parser>
+var ACR={vpn:'VPN',hr:'HR',sso:'SSO',wifi:'Wi-Fi','wi-fi':'Wi-Fi',erp:'ERP',crm:'CRM',pc:'PC',usb:'USB',vm:'VM',mfa:'MFA',ip:'IP',api:'API',it:'IT',ui:'UI',sap:'SAP',ssl:'SSL',lan:'LAN',vpns:'VPNs'};
+var NUMW={zero:0,one:1,two:2,three:3,four:4,five:5,six:6,seven:7,eight:8,nine:9,ten:10,eleven:11,twelve:12,thirteen:13,fourteen:14,fifteen:15,sixteen:16,seventeen:17,eighteen:18,nineteen:19,twenty:20,thirty:30,forty:40,fifty:50,sixty:60,seventy:70,eighty:80,ninety:90};
+function norm(s){return String(s).toLowerCase().replace(/[“”"‘’']/g,'').replace(/[.,;:!?()]/g,' ').replace(/\s+/g,' ').trim();}
+function wordsToNum(s){if(/^\d+$/.test(s))return +s;var p=s.split(/[\s-]+/),n=0;for(var i=0;i<p.length;i++){if(!(p[i] in NUMW))return NaN;n+=NUMW[p[i]];}return n;}
+function titleCase(s){return s.split(' ').map(function(w){return w?w.charAt(0).toUpperCase()+w.slice(1):w;}).join(' ');}
+function fmtSubject(s){var t=s.trim().split(' ').map(function(x){return ACR[x]||x;}).join(' ');return t.charAt(0).toUpperCase()+t.slice(1);}
+function lev(a,b){var m=a.length,n=b.length;if(!m)return n;if(!n)return m;var prev=[];for(var j=0;j<=n;j++)prev[j]=j;for(var i=1;i<=m;i++){var cur=[i];for(var k=1;k<=n;k++){cur[k]=Math.min(prev[k]+1,cur[k-1]+1,prev[k-1]+(a.charAt(i-1)===b.charAt(k-1)?0:1));}prev=cur;}return prev[n];}
+function tokMatch(tok,word){if(word.indexOf(tok)>-1)return true;var tol=tok.length>=7?2:(tok.length>=4?1:0);return tol>0&&lev(tok,word)<=tol;}
+function matchCustomer(phrase,customers){var toks=norm(phrase).split(' ').filter(Boolean),best=null,bs=0;customers.forEach(function(c){var score=0;norm(c.name).split(' ').forEach(function(w){if(toks.some(function(t){return tokMatch(t,w)||tokMatch(w,t);}))score++;});if(score>bs){best=c;bs=score;}});return best;}
+function ticketMatches(t,q){var toks=norm(q).split(' ').filter(Boolean);if(!toks.length)return true;var words=norm([t.id,t.customer,t.type,t.subject,t.status,t.priority].join(' ')).split(' ');return toks.every(function(tok){return words.some(function(w){return tokMatch(tok,w);});});}
+function resolveModule(s){
+  if(/\b(hr|h r|human resources?|hrm)\b/.test(s))return 'hr';
+  if(/\b(ticket|tickets|ticketing|tickent|help ?desk|service desk)\b/.test(s))return 'tickets';
+  if(/\b(customers?|clients?|crm)\b/.test(s))return 'customers';
+  return null;
+}
+var STARTERS=['open','go to','goto','go back','switch to','take me to','launch','navigate to','exit','close','leave','quit','search','find','look up','lookup','create','raise','log','enter','add','fill in','fill','save','submit','cancel','clear','reset','help','stop listening','show'];
+var SPLIT_RE=new RegExp('\\b(?=(?:'+STARTERS.slice().sort(function(a,b){return b.length-a.length;}).map(function(s){return s.replace(/ /g,'\\s+');}).join('|')+')\\b)');
+var EXITW={form:1,module:1,hr:1,h:1,r:1,human:1,resources:1,ticketing:1,ticket:1,tickets:1,customer:1,customers:1,the:1,this:1,window:1,screen:1,page:1,now:1,please:1,and:1,then:1,to:1,home:1,main:1,menu:1,it:1};
+var EXITRE=/^(?:exit|close|leave|quit|go back|back)\b/;
+function isPureExit(p){if(!EXITRE.test(p))return false;return p.replace(EXITRE,'').split(' ').filter(Boolean).every(function(w){return EXITW[w];});}
+function segment(text){
+  var parts=text.split(SPLIT_RE).map(function(s){return s.trim();}).filter(Boolean),out=[];
+  parts.forEach(function(p){
+    p=p.replace(/^(?:(?:and|then|also|now|next|please|okay|ok)\s+)+/,'');
+    if(!p)return;
+    var isNav=/^(?:open|go to|goto|switch to|take me to|launch|navigate to|show)\b/.test(p);
+    var navOk=resolveModule(p)||/\b(?:home|main menu|dashboard)\b/.test(p)||/^show\s+(?:me\s+)?(?:all|everything)/.test(p);
+    var exitLike=EXITRE.test(p)&&!isPureExit(p);
+    if(out.length&&((isNav&&!navOk)||exitLike)){out[out.length-1]+=' '+p;return;}
+    out.push(p);
+  });
+  return out.map(function(s){return s.replace(/\s+(?:(?:and|then|also|please)\s*)+$/,'').trim();}).filter(Boolean);
+}
+var STOPF='(?:age|aged|department|dept|role|designation|position)';
+var AGEW='(\\d{1,3}|(?:twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety)(?:[\\s-](?:one|two|three|four|five|six|seven|eight|nine))?|zero|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen)';
+function parsePriority(seg){
+  var m=seg.match(/\bpriority\s+(?:is\s+)?(low|medium|normal|high|urgent|critical)\b/)||seg.match(/\b(low|medium|normal|high|urgent|critical)\s+priority\b/);
+  if(!m)return null;var v=m[1];return v==='normal'?'Medium':v==='critical'?'Urgent':titleCase(v);
+}
+function parseFields(seg){
+  var f={},m;
+  m=seg.match(new RegExp('\\bnamed?\\s+(?:is\\s+)?(.+?)(?=\\s+(?:and\\s+)?'+STOPF+'\\b|$)'));
+  if(m&&m[1])f.name=titleCase(m[1]);
+  m=seg.match(new RegExp('\\b(?:age|aged)\\s+(?:is\\s+)?'+AGEW+'\\b'));
+  if(m)f.age=wordsToNum(m[1]);
+  m=seg.match(/\b(?:department|dept)\s+(?:is\s+)?(.+?)(?=\s+(?:and\s+)?(?:age|aged|name|role|designation|position)\b|$)/);
+  if(m&&m[1])f.department=titleCase(m[1]);
+  m=seg.match(/\b(?:role|designation|position)\s+(?:is\s+)?(.+?)(?=\s+(?:and\s+)?(?:age|aged|name|department|dept)\b|$)/);
+  if(m&&m[1])f.role=titleCase(m[1]);
+  m=seg.match(/\bsubject\s+(?:is\s+)?(.+?)(?=\s+priority\b|$)/);
+  if(m&&m[1])f.subject=fmtSubject(m[1]);
+  var p=parsePriority(seg);if(p)f.priority=p;
+  return f;
+}
+var TYPES='support request|service request|access request|change request|incident|problem|bug';
+var TYPEMAP={'support request':'Support request','service request':'Service request','access request':'Service request','change request':'Change request','incident':'Incident','problem':'Incident','bug':'Incident'};
+function parseTicket(seg){
+  var out={},m;
+  var STOP='(?=\\s+(?:'+TYPES+'|issue|request|regarding|about|priority|saying|with)\\b|$)';
+  m=seg.match(new RegExp('\\bbehalf of\\s+(.+?)'+STOP))||seg.match(new RegExp('\\bfor customer\\s+(.+?)'+STOP))||seg.match(new RegExp('\\btick\\w*\\s+for\\s+(.+?)'+STOP));
+  if(m)out.customerPhrase=m[1].trim();
+  m=seg.match(new RegExp('\\b('+TYPES+')\\b'));
+  if(m)out.type=TYPEMAP[m[1]];
+  var sm=seg.match(new RegExp('\\b(?:'+TYPES+')\\s+(?:(?:for|about|regarding|on|related to|with|of)\\s+)?(.+?)(?=\\s+priority\\b|$)'));
+  if(!sm)sm=seg.match(/\b(?:about|regarding|subject|related to|issue with|problem with)\s+(.+?)(?=\s+priority\b|$)/);
+  if(sm&&sm[1]){var s=sm[1].replace(/\s+(?:on behalf of|behalf of|for customer)\s+.*$/,'').trim();if(s)out.subject=fmtSubject(s);}
+  var p=parsePriority(seg);if(p)out.priority=p;
+  return out;
+}
+function cleanQuery(q){return q.replace(/\s+(?:any\s+)?(?:open\s+)?tickets?$/,'').replace(/^(?:any|all)\s+/,'').replace(/^tickets?\s+(?:for|of|about)?\s*/,'').replace(/^(?:for|of)\s+/,'').trim();}
+function parseSegment(seg){
+  var m;
+  if(!seg)return null;
+  if(/^(?:stop listening|stop dictation)\b/.test(seg))return {type:'stopListening'};
+  if(/^help\b/.test(seg))return {type:'help'};
+  if(/^(?:show|list)\s+(?:me\s+)?(?:all|everything)\b/.test(seg)||/^(?:clear|reset)\s+(?:the\s+)?(?:search|filter)\b/.test(seg))return {type:'clearSearch'};
+  m=seg.match(/^go back to\s+(.*)$/);
+  if(m){var bm=resolveModule(m[1]);if(bm)return {type:'open',module:bm};}
+  if(isPureExit(seg)||/^(?:go (?:to )?)?(?:the )?(?:home|main menu|dashboard|start)(?: screen| page)?$/.test(seg))return {type:'exit'};
+  if(/^(?:create|raise|log|add|new)\b/.test(seg)&&/\b(?:ticket|tickets|tickent|tiket)\b/.test(seg)){var t=parseTicket(seg);t.type2=t.type;t.type='createTicket';return t;}
+  m=seg.match(/^(?:open|go to|goto|switch to|take me to|launch|navigate to|show)\s+(.*)$/);
+  if(m){var mod=resolveModule(m[1]);if(mod)return {type:'open',module:mod};}
+  if(/^(?:the\s+)?(?:hr|h r|human resources?|hrm|ticketing|tickets?|help ?desk|customers?|crm)(?:\s+module)?$/.test(seg))return {type:'open',module:resolveModule(seg)};
+  m=seg.match(/^(?:search|find|look up|lookup)\s*(?:for\s+)?(.*)$/);
+  if(m)return {type:'search',q:cleanQuery(m[1])};
+  if(/^(?:save|submit)\b/.test(seg))return {type:'save'};
+  if(/^(?:cancel|clear|reset)\b/.test(seg))return {type:'clearForm'};
+  var f=parseFields(seg);
+  if(Object.keys(f).length)return {type:'fill',fields:f};
+  if(/^(?:enter|add|fill in|fill|create|new)\b/.test(seg)&&/\b(?:employee|details|record|form)\b/.test(seg))return {type:'fill',fields:{},target:'hr'};
+  return null;
+}
+// </parser>
+
+var NAME={hr:'HR',tickets:'Ticketing',customers:'Customers'};
+var VIEWS=['home','hr','tickets','customers'];
+var HELP='Say things like “open HR”, “enter employee details, name Asha and age 30”, “save”, “exit”, “go to ticketing”, “search for Asha”, “go to customer module”, or “create a ticket on behalf of Asha, support request for VPN”. You can chain several in one sentence.';
+function seed(){
+  return {
+    view:'home',search:'',nextEmp:5,nextTk:1043,
+    employees:[
+      {id:'EMP-004',name:'Sofia Rossi',age:26,dept:'People',role:'HR Associate'},
+      {id:'EMP-003',name:'Mei Tanaka',age:41,dept:'Operations',role:'Ops Manager'},
+      {id:'EMP-002',name:'Daniel Okoye',age:34,dept:'Engineering',role:'Backend Engineer'},
+      {id:'EMP-001',name:'Rhea Kapoor',age:29,dept:'Finance',role:'Accountant'}
+    ],
+    customers:[
+      {id:'c1',name:'Uddgam Singh',company:'Northwind Traders'},
+      {id:'c2',name:'Priya Nair',company:'Globex Retail'},
+      {id:'c3',name:'Marcus Lee',company:'Initech Labs'},
+      {id:'c4',name:'Ana Torres',company:'Contoso Health'}
+    ],
+    tickets:[
+      {id:'TCK-1042',cid:'c3',customer:'Marcus Lee',type:'Incident',subject:'Payroll export timeout',priority:'High',status:'Open',created:'Nov 9'},
+      {id:'TCK-1041',cid:'c4',customer:'Ana Torres',type:'Support request',subject:'Printer offline, floor 3',priority:'Medium',status:'Open',created:'Nov 8'},
+      {id:'TCK-1040',cid:'c1',customer:'Uddgam Singh',type:'Support request',subject:'Laptop battery replacement',priority:'Low',status:'Resolved',created:'Nov 4'},
+      {id:'TCK-1039',cid:'c3',customer:'Marcus Lee',type:'Service request',subject:'New laptop provisioning',priority:'Medium',status:'In progress',created:'Nov 3'},
+      {id:'TCK-1038',cid:'c2',customer:'Priya Nair',type:'Incident',subject:'Email sync failing on mobile',priority:'High',status:'In progress',created:'Nov 2'}
+    ]
+  };
+}
+var S=seed();
+function $(id){return document.getElementById(id);}
+function esc(s){return String(s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];});}
+var reduce=window.matchMedia&&matchMedia('(prefers-reduced-motion: reduce)').matches;
+function sleep(ms){return new Promise(function(r){setTimeout(r,reduce?0:ms);});}
+function flash(el){el.classList.remove('flash');void el.offsetWidth;el.classList.add('flash');}
+async function typeInto(el,text){
+  if(el.value===text){flash(el);return;}
+  el.value='';var d=Math.min(30,700/Math.max(text.length,1));
+  for(var i=1;i<=text.length;i++){el.value=text.slice(0,i);await sleep(d);}
+  flash(el);
+}
+function setSelect(el,v){el.value=v;flash(el);}
+
+/* ---------- rendering ---------- */
+function statusClass(s){return s==='Open'?'s-open':s==='In progress'?'s-prog':'s-done';}
+function renderHome(){
+  $('cHr').textContent=S.employees.length+' employees';
+  var open=S.tickets.filter(function(t){return t.status!=='Resolved';}).length;
+  $('cTk').textContent=open+' open of '+S.tickets.length+' tickets';
+  $('cCu').textContent=S.customers.length+' customers';
+}
+function renderEmployees(newId){
+  $('empBody').innerHTML=S.employees.map(function(e){return '<tr class="'+(e.id===newId?'new':'')+'"><td class="mono">'+e.id+'</td><td>'+esc(e.name)+'</td><td class="num">'+e.age+'</td><td>'+esc(e.dept)+'</td><td>'+esc(e.role)+'</td></tr>';}).join('');
+  $('empCount').textContent=S.employees.length+' records';
+  renderHome();
+}
+function renderTickets(newId){
+  var rows=S.tickets.filter(function(t){return ticketMatches(t,S.search);});
+  $('tkBody').innerHTML=rows.length?rows.map(function(t){
+    return '<tr class="'+(t.id===newId?'new':'')+'"><td class="mono">'+t.id+'</td><td>'+esc(t.customer)+'</td><td>'+esc(t.type)+'</td><td>'+esc(t.subject)+'</td><td><span class="pill p-'+t.priority.toLowerCase()+'">'+t.priority+'</span></td><td><span class="pill '+statusClass(t.status)+'">'+t.status+'</span></td><td class="num">'+t.created+'</td></tr>';
+  }).join(''):'<tr class="empty"><td colspan="7">No tickets match “'+esc(S.search)+'”. Say “show all tickets” to clear the search.</td></tr>';
+  $('tkMeta').textContent=S.search.trim()?('Showing '+rows.length+' of '+S.tickets.length+' tickets for “'+S.search.trim()+'”'):(S.tickets.length+' tickets');
+  renderHome();
+}
+function renderCustomers(){
+  var sel=$('f-tk-customer'),cur=sel.value;
+  sel.innerHTML='<option value="">Choose a customer</option>'+S.customers.map(function(c){return '<option value="'+c.id+'">'+esc(c.name)+' · '+esc(c.company)+'</option>';}).join('');
+  sel.value=cur;
+  $('cuBody').innerHTML=S.customers.map(function(c){
+    var n=S.tickets.filter(function(t){return t.cid===c.id&&t.status!=='Resolved';}).length;
+    return '<tr class="pick'+(sel.value===c.id?' sel':'')+'" data-cid="'+c.id+'"><td>'+esc(c.name)+'</td><td>'+esc(c.company)+'</td><td class="num">'+n+'</td></tr>';
+  }).join('');
+  $('cuCount').textContent=S.customers.length+' accounts';
+}
+function showView(){
+  VIEWS.forEach(function(v){$('view-'+v).hidden=(v!==S.view);});
+  $('tkResult').hidden=true;
+  $('crumbs').innerHTML=S.view==='home'?'<b>Home</b>':'<span>Home</span><span>/</span><b>'+NAME[S.view]+'</b>';
+  if(S.view==='customers')renderCustomers();
+}
+
+/* ---------- drafts ---------- */
+function empDraft(){return {name:$('f-emp-name').value.trim(),age:$('f-emp-age').value.trim(),department:$('f-emp-dept').value.trim(),role:$('f-emp-role').value.trim()};}
+function validAge(a){var n=parseInt(a,10);return /^\d{1,2}$/.test(String(a))&&n>=16&&n<=99;}
+function clearEmpForm(){['f-emp-name','f-emp-age','f-emp-dept','f-emp-role'].forEach(function(i){$(i).value='';});}
+function tkDraft(){return {customerId:$('f-tk-customer').value,type:$('f-tk-type').value,subject:$('f-tk-subject').value.trim(),priority:$('f-tk-priority').value};}
+function clearTkForm(){$('f-tk-customer').value='';$('f-tk-type').value='Support request';$('f-tk-subject').value='';$('f-tk-priority').value='Medium';if(S.view==='customers')renderCustomers();}
+function saveEmployee(d){
+  var e={id:'EMP-'+String(S.nextEmp++).padStart(3,'0'),name:titleCase(d.name),age:parseInt(d.age,10),dept:d.department||'—',role:d.role||'—'};
+  S.employees.unshift(e);clearEmpForm();renderEmployees(e.id);return e;
+}
+function submitTicket(d){
+  var c=S.customers.filter(function(x){return x.id===d.customerId;})[0];
+  var t={id:'TCK-'+(S.nextTk++),cid:c.id,customer:c.name,type:d.type,subject:d.subject,priority:d.priority,status:'Open',created:new Date().toLocaleDateString('en-US',{month:'short',day:'numeric'})};
+  S.tickets.unshift(t);clearTkForm();renderTickets(t.id);
+  $('tkResult').hidden=false;
+  $('tkResult').innerHTML='<b>'+t.id+'</b> created for '+esc(c.name)+' · '+esc(t.type)+' · '+esc(t.subject)+' · '+t.priority+' priority';
+  return t;
+}
+function leaveCurrent(){
+  var note='';
+  if(S.view==='hr'){
+    var d=empDraft();
+    if(d.name||d.age||d.department||d.role){
+      if(d.name&&validAge(d.age)){var e=saveEmployee(d);note='Saved '+e.name+' as '+e.id+'.';}
+      else{clearEmpForm();note='Discarded the incomplete employee form.';}
+    }
+  }else if(S.view==='customers'){
+    var k=tkDraft();
+    if(k.subject||k.customerId){
+      if(k.subject&&k.customerId){var t=submitTicket(k);note='Created '+t.id+' for '+t.customer+'.';}
+      else{clearTkForm();note='Discarded the incomplete ticket form.';}
+    }
+  }
+  return note;
+}
+
+/* ---------- actions ---------- */
+async function switchTo(id){
+  if(S.view===id)return '';
+  var note=leaveCurrent();S.view=id;showView();await sleep(220);
+  return (note?note+' ':'')+'Opened '+NAME[id]+'.';
+}
+function goHome(){S.view='home';showView();}
+async function doFill(it){
+  var f=it.fields||{};
+  var target=it.target||(((f.subject||f.priority)&&!(f.name||f.age!==undefined||f.department||f.role))?'customers':'hr');
+  var pre=await switchTo(target);pre=pre?pre+' ':'';
+  var parts=[],warn='';
+  if(target==='hr'){
+    if(f.name){await typeInto($('f-emp-name'),f.name);parts.push('name '+f.name);}
+    if(f.age!==undefined){
+      if(f.age>=16&&f.age<=99){await typeInto($('f-emp-age'),String(f.age));parts.push('age '+f.age);}
+      else warn=' Age should be between 16 and 99, so I left it empty.';
+    }
+    if(f.department){await typeInto($('f-emp-dept'),f.department);parts.push('department '+f.department);}
+    if(f.role){await typeInto($('f-emp-role'),f.role);parts.push('role '+f.role);}
+    return pre+(parts.length?'Entered '+parts.join(', ')+'.'+warn+' Say “save”, or “exit” to store it.':'The employee form is ready.'+warn+' Say a name and an age.');
+  }
+  if(f.subject){await typeInto($('f-tk-subject'),f.subject);parts.push('subject '+f.subject);}
+  if(f.priority){setSelect($('f-tk-priority'),f.priority);parts.push('priority '+f.priority);}
+  var need=$('f-tk-customer').value?'':' Choose a customer too: say “create a ticket on behalf of …”.';
+  return pre+(parts.length?'Entered '+parts.join(', ')+'.'+need+' Say “save” to create the ticket.':'The ticket form is ready.');
+}
+async function doCreateTicket(it){
+  var pre=await switchTo('customers');pre=pre?pre+' ':'';
+  if(!it.customerPhrase)return pre+'Who is the ticket for? Say “create a ticket on behalf of” and a customer name.';
+  var c=matchCustomer(it.customerPhrase,S.customers);
+  if(!c)return pre+'I could not find a customer matching “'+it.customerPhrase+'”. Customers: '+S.customers.map(function(x){return x.name;}).join(', ')+'.';
+  clearTkForm();
+  setSelect($('f-tk-customer'),c.id);renderCustomers();
+  var type=it.type2||'Support request';setSelect($('f-tk-type'),type);
+  if(it.priority)setSelect($('f-tk-priority'),it.priority);
+  if(!it.subject)return pre+'Ticket drafted for '+c.name+' ('+type+'). What is it about? Say “subject” and a short title.';
+  await typeInto($('f-tk-subject'),it.subject);
+  await sleep(300);
+  var t=submitTicket(tkDraft());
+  return pre+'Created '+t.id+' for '+c.name+': '+type+', “'+t.subject+'”.';
+}
+async function doSearch(it){
+  var pre=await switchTo('tickets');pre=pre?pre+' ':'';
+  if(!it.q)return pre+'What should I search for? Say “search for” and a customer, subject or ticket ID.';
+  var shown=titleCase(it.q);
+  await typeInto($('tkSearch'),shown);
+  S.search=shown;renderTickets();
+  var hits=S.tickets.filter(function(t){return ticketMatches(t,shown);});
+  if(!hits.length)return pre+'No tickets found for “'+shown+'”.';
+  return pre+'Found '+hits.length+' ticket'+(hits.length>1?'s':'')+' for “'+shown+'”: '+hits.slice(0,3).map(function(t){return t.id+', '+t.subject+' ('+t.status+')';}).join('; ')+'.';
+}
+async function doClearSearch(){
+  var pre=await switchTo('tickets');pre=pre?pre+' ':'';
+  S.search='';$('tkSearch').value='';renderTickets();
+  return pre+'Showing all '+S.tickets.length+' tickets.';
+}
+async function doSave(){
+  if(S.view==='hr'){
+    var d=empDraft();
+    if(!d.name)return 'I need a name first. Say “name” and the employee’s name.';
+    if(!validAge(d.age))return 'I need a valid age (16 to 99) first. Say “age” and a number.';
+    var e=saveEmployee(d);return 'Saved '+e.name+' as '+e.id+'.';
+  }
+  if(S.view==='customers'){
+    var k=tkDraft();
+    if(!k.customerId)return 'Choose a customer first. Say “create a ticket on behalf of” and a name.';
+    if(!k.subject)return 'What is the ticket about? Say “subject” and a short title.';
+    var t=submitTicket(k);return 'Created '+t.id+' for '+t.customer+'.';
+  }
+  return 'There is no open form to save here.';
+}
+function doClearForm(){
+  if(S.view==='hr'){clearEmpForm();return 'Cleared the employee form.';}
+  if(S.view==='customers'){clearTkForm();return 'Cleared the ticket form.';}
+  if(S.view==='tickets'){S.search='';$('tkSearch').value='';renderTickets();return 'Cleared the search.';}
+  return 'Nothing to clear here.';
+}
+async function execute(it){
+  switch(it.type){
+    case 'open':{var r=await switchTo(it.module);return r||(NAME[it.module]+' is already open.');}
+    case 'exit':{
+      if(S.view==='home')return 'You are already on the home screen.';
+      var nm=NAME[S.view],note=leaveCurrent();goHome();await sleep(150);
+      return (note?note+' ':'')+'Closed '+nm+'. Back on the home screen.';
+    }
+    case 'fill':return doFill(it);
+    case 'createTicket':return doCreateTicket(it);
+    case 'search':return doSearch(it);
+    case 'clearSearch':return doClearSearch();
+    case 'save':return doSave();
+    case 'clearForm':return doClearForm();
+    case 'help':return HELP;
+    case 'stopListening':if(dict&&dict.active())dict.stop().catch(function(){});return 'Stopped listening.';
+  }
+  return 'Not sure what to do with that.';
+}
+
+/* ---------- log + command queue ---------- */
+function addLog(kind,text){
+  var li=document.createElement('li');li.className=kind;li.textContent=text;
+  var log=$('log');log.appendChild(li);
+  while(log.children.length>40)log.removeChild(log.firstChild);
+  log.scrollTop=log.scrollHeight;
+}
+var chain=Promise.resolve();
+function queue(fn){chain=chain.then(fn).catch(function(e){addLog('warn','Something went wrong: '+(e&&e.message||e));});}
+function act(intent){queue(async function(){addLog('bot',await execute(intent));});}
+function handleUtterance(raw){
+  var text=norm(raw);if(!text)return;
+  addLog('you',raw.trim());
+  var items=segment(text).map(function(s){return {seg:s,intent:parseSegment(s)};});
+  if(!items.some(function(x){return x.intent;})){
+    addLog('warn','I did not catch a command in that. Try “open HR”, or say “help”.');return;
+  }
+  items.forEach(function(x){
+    if(!x.intent){queue(function(){addLog('warn','Skipped “'+x.seg+'”, which is not a command I know.');});return;}
+    queue(async function(){addLog('bot',await execute(x.intent));});
+  });
+}
+
+/* ---------- voice ---------- */
+var dict=null,buf='',flushT=null;
+var mic=$('mic'),micLabel=$('micLabel'),live=$('live');
+function setLive(t){var s=(t||'').trim();live.textContent=s||'Listening…';live.classList.toggle('idle',!s);}
+function flush(){clearTimeout(flushT);var t=buf.trim();buf='';if(t){live.textContent='“'+t+'”';live.classList.remove('idle');handleUtterance(t);}}
+function pushFinal(t){buf+=t;setLive(buf);clearTimeout(flushT);flushT=setTimeout(flush,1000);}
+function drawMic(state){
+  mic.dataset.state=state;mic.setAttribute('aria-pressed',state==='listening'?'true':'false');
+  micLabel.textContent={idle:'Start listening',starting:'Starting…',listening:'Listening · tap to stop',finishing:'Finishing…'}[state]||'Start listening';
+}
+function voiceOff(msg){mic.disabled=true;micLabel.textContent='Voice unavailable';$('status').textContent='Typed commands only';$('voiceNote').textContent=msg;}
+function onDictError(err){
+  var c=err&&err.code;
+  if(c==='stopped')return;
+  if(c==='not_granted'){$('voiceNote').textContent='Microphone access was blocked. Allow it from the lock icon in the address bar, then click the mic again. You can also type commands below.';}
+  else if(c==='dismissed'){$('voiceNote').textContent='The permission prompt was closed. Click the mic to try again.';}
+  else if(c==='unavailable'){voiceOff('Voice input is not offered here. Type commands below.');}
+  else if(c==='rate_limited'){$('voiceNote').textContent='Too many dictations right now. Try again in a moment.';}
+  else if(c==='no_gesture'){$('voiceNote').textContent='Click the mic button directly to start.';}
+  else{$('voiceNote').textContent='The speech service had a problem. Try again.';}
+}
+mic.addEventListener('click',function(){
+  if(!dict)return;
+  if(dict.active()){dict.stop().catch(function(){});return;}
+  dict.start().catch(onDictError);
+});
+function wireDictation(d){
+  dict=d;
+  if(!d){voiceOff('This browser has no speech recognition. Use Chrome, Edge or Safari over https, or type commands below and use the sequence buttons.');return;}
+  mic.disabled=false;drawMic('idle');
+  $('status').textContent='Voice ready';
+  $('voiceNote').textContent='Click the mic and speak. Chain commands in one breath, for example “open HR, enter employee details name Asha and age 30, exit”.';
+  d.onPartial(function(e){setLive((buf+' '+e.text).trim());});
+  d.onFinal(function(e){pushFinal(e.text);});
+  d.onState(function(e){
+    drawMic(e.state);
+    $('status').textContent=e.state==='listening'?'Listening':e.state==='idle'?'Voice ready':'';
+    if(e.state==='idle'){
+      flush();
+      if(e.reason==='hidden')$('voiceNote').textContent='Paused while the page was hidden. Click the mic to resume.';
+      else if(e.reason==='time_limit')$('voiceNote').textContent='Listening ended after the 60-minute limit. Click the mic to continue.';
+      else if(e.reason==='viewer_stopped')$('voiceNote').textContent='Stopped. Click the mic to listen again.';
+      else if(e.reason==='unavailable')voiceOff('Voice input is not offered here. Type commands below.');
+      else if(e.reason==='not_granted')$('voiceNote').textContent='Microphone access is switched off for this page.';
+      else if(e.reason==='upstream_error')$('voiceNote').textContent='The microphone or speech service failed. Click the mic to retry.';
+    }
+  });
+}
+
+/* ---------- UI wiring ---------- */
+document.querySelectorAll('[data-open]').forEach(function(b){b.addEventListener('click',function(){act({type:'open',module:b.dataset.open});});});
+document.querySelectorAll('[data-exit]').forEach(function(b){b.addEventListener('click',function(){act({type:'exit'});});});
+$('empForm').addEventListener('submit',function(e){e.preventDefault();act({type:'save'});});
+$('tkForm').addEventListener('submit',function(e){e.preventDefault();act({type:'save'});});
+$('empClear').addEventListener('click',function(){clearEmpForm();});
+$('tkFormClear').addEventListener('click',function(){clearTkForm();$('tkResult').hidden=true;});
+$('tkSearchForm').addEventListener('submit',function(e){e.preventDefault();});
+$('tkSearch').addEventListener('input',function(){S.search=this.value;renderTickets();});
+$('tkClear').addEventListener('click',function(){S.search='';$('tkSearch').value='';renderTickets();});
+$('f-tk-customer').addEventListener('change',renderCustomers);
+$('cuBody').addEventListener('click',function(e){var tr=e.target.closest('tr[data-cid]');if(tr){$('f-tk-customer').value=tr.dataset.cid;renderCustomers();}});
+$('cmdForm').addEventListener('submit',function(e){e.preventDefault();var v=$('cmd').value;$('cmd').value='';handleUtterance(v);});
+$('seq').addEventListener('click',function(e){var b=e.target.closest('button');if(b)handleUtterance(b.textContent);});
+$('reset').addEventListener('click',function(){
+  S=seed();clearEmpForm();clearTkForm();$('tkSearch').value='';
+  renderEmployees();renderTickets();renderCustomers();showView();
+  $('log').innerHTML='';addLog('bot','Sample data reset.');
+});
+
+renderEmployees();renderTickets();renderCustomers();showView();
+addLog('bot','Hi. Say “open HR” to begin, or use the sequence on the right.');
+function makeSpeech(){
+  var SR=window.SpeechRecognition||window.webkitSpeechRecognition;
+  if(!SR)return null;
+  var rec=null,state='idle',wantStop=false,fatal=null,quick=0,t0=0;
+  var hP=[],hF=[],hS=[],waiters=[],startCb=null;
+  function each(list,arg){list.slice().forEach(function(f){f(arg);});}
+  function setState(s,reason){state=s;each(hS,{state:s,reason:reason});}
+  function finish(reason){
+    rec=null;setState('idle',reason);
+    waiters.splice(0).forEach(function(r){r();});
+    if(startCb){startCb.rej({code:reason==='not_granted'?'not_granted':reason==='stopped'?'stopped':'upstream_error'});startCb=null;}
+  }
+  function spawn(){
+    var r=new SR();rec=r;
+    r.lang=navigator.language||'en-US';r.continuous=true;r.interimResults=true;
+    r.onstart=function(){t0=Date.now();if(state!=='listening')setState('listening');if(startCb){startCb.res();startCb=null;}};
+    r.onresult=function(e){
+      quick=0;var interim='';
+      for(var i=e.resultIndex;i<e.results.length;i++){
+        var res=e.results[i],t=res[0].transcript;
+        if(res.isFinal){var s=t.trim();if(s)each(hF,{text:' '+s});}
+        else interim+=t;
+      }
+      each(hP,{text:interim});
+    };
+    r.onerror=function(e){
+      if(e.error==='not-allowed'||e.error==='service-not-allowed')fatal='not_granted';
+      else if(e.error==='audio-capture'||e.error==='network')fatal='upstream_error';
+    };
+    r.onend=function(){
+      each(hP,{text:''});
+      if(!wantStop&&!fatal){
+        quick=(Date.now()-t0<600)?quick+1:0;
+        if(quick<4){try{spawn();rec.start();return;}catch(x){fatal='upstream_error';}}
+        else fatal='upstream_error';
+      }
+      finish(wantStop?'stopped':(fatal||'upstream_error'));
+    };
+  }
+  return {
+    start:function(){return new Promise(function(res,rej){
+      if(state!=='idle'){res();return;}
+      wantStop=false;fatal=null;quick=0;startCb={res:res,rej:rej};setState('starting');
+      try{spawn();rec.start();}catch(x){startCb=null;setState('idle','upstream_error');rej({code:'upstream_error'});}
+    });},
+    stop:function(){
+      if(state==='idle')return Promise.resolve();
+      wantStop=true;
+      return new Promise(function(r){waiters.push(r);try{if(rec)rec.stop();}catch(x){}});
+    },
+    active:function(){return state!=='idle';},
+    onPartial:function(f){hP.push(f);return function(){hP=hP.filter(function(x){return x!==f;});};},
+    onFinal:function(f){hF.push(f);return function(){hF=hF.filter(function(x){return x!==f;});};},
+    onState:function(f){hS.push(f);return function(){hS=hS.filter(function(x){return x!==f;});};}
+  };
+}
+wireDictation(makeSpeech());
+})();
+</script>
+</body>
+</html>
